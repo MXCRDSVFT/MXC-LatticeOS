@@ -1,0 +1,13 @@
+{
+  "schema": "mxc.live_runtime_receipt.networks.v1",
+  "network": "lattice",
+  "recipients": ["CIN", "EVE", "ORACLE"],
+  "sources": ["Thunder", "VORTEX", "Starburst"],
+  "delivery": {
+    "mode": "live",
+    "requires_authenticated_endpoint": true,
+    "requires_integrity_hash": true,
+    "public_listener": false
+  },
+  "runtime_status": "contract_only_no_runtime_implementation_present"
+}
