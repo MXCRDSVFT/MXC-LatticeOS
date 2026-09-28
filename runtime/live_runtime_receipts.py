@@ -76,10 +76,12 @@ def build_receipt(
     source: str,
     event: str,
     payload: dict[str, Any],
+    network: str | None = None,
 ) -> RuntimeReceipt:
     observed = _now()
+    network_name = network or NETWORK
     unsigned = {
-        "network": NETWORK,
+        "network": network_name,
         "device": device,
         "source": source,
         "event": event,
@@ -87,7 +89,7 @@ def build_receipt(
         "payload": payload,
     }
     digest = hashlib.sha256(_canonical(unsigned)).hexdigest()
-    return RuntimeReceipt(NETWORK, device, source, event, observed, payload, digest)
+    return RuntimeReceipt(network_name, device, source, event, observed, payload, digest)
 
 
 def persist_receipt(receipt: RuntimeReceipt) -> Path:
@@ -97,9 +99,10 @@ def persist_receipt(receipt: RuntimeReceipt) -> Path:
     return path
 
 
-def send_receipt(receipt: RuntimeReceipt, recipients: list[str] | None = None) -> dict[str, Any]:
-    targets = recipients if recipients is not None else _recipients()
-    token = _token()
+def send_receipt(receipt: RuntimeReceipt, recipients: list[str] | None = None, prefix: str | None = None) -> dict[str, Any]:
+    active_prefix = prefix or PREFIX
+    targets = recipients if recipients is not None else [item.strip().rstrip("/") for item in os.getenv(f"{active_prefix}_RECEIPT_RECIPIENTS", "").split(",") if item.strip()]
+    token = os.getenv(f"{active_prefix}_RECEIPT_TOKEN", "")
     body = _canonical(receipt.to_dict())
     results: dict[str, Any] = {"network": NETWORK, "device": receipt.device, "receipt_sha256": receipt.receipt_sha256, "delivered": [], "failed": []}
     for target in targets:
@@ -114,7 +117,7 @@ def send_receipt(receipt: RuntimeReceipt, recipients: list[str] | None = None) -
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=float(os.getenv(f"{PREFIX}_RECEIPT_TIMEOUT", "5"))) as response:
+            with urllib.request.urlopen(request, timeout=float(os.getenv(f"{active_prefix}_RECEIPT_TIMEOUT", "5"))) as response:
                 if 200 <= response.status < 300:
                     results["delivered"].append(target)
                 else:
@@ -124,22 +127,24 @@ def send_receipt(receipt: RuntimeReceipt, recipients: list[str] | None = None) -
     return results
 
 
-def emit_receipt(device: str, source: str, event: str, payload: dict[str, Any]) -> dict[str, Any]:
-    receipt = build_receipt(device, source, event, payload)
+def emit_receipt(device: str, source: str, event: str, payload: dict[str, Any], network: str | None = None, prefix: str | None = None) -> dict[str, Any]:
+    receipt = build_receipt(device, source, event, payload, network=network)
     persist_receipt(receipt)
-    return {"receipt": receipt.to_dict(), "delivery": send_receipt(receipt)}
+    return {"receipt": receipt.to_dict(), "delivery": send_receipt(receipt, prefix=prefix)}
 
 
-def receive_receipt(headers: dict[str, str], body: bytes) -> Path:
-    expected = _token()
+def receive_receipt(headers: dict[str, str], body: bytes, network: str | None = None, prefix: str | None = None) -> Path:
+    active_network = network or NETWORK
+    active_prefix = prefix or PREFIX
+    expected = os.getenv(f"{active_prefix}_RECEIPT_TOKEN", "")
     supplied = headers.get("Authorization", "")
     if not expected or supplied != f"Bearer {expected}":
         raise PermissionError("runtime receipt authorization failed")
     data = json.loads(body.decode("utf-8"))
     if data.get("schema") != "mxc.live_runtime_receipt.v1":
         raise ValueError("unsupported runtime receipt schema")
-    if data.get("network") != NETWORK:
-        raise ValueError(f"receipt network mismatch: expected {NETWORK!r}")
+    if data.get("network") != active_network:
+        raise ValueError(f"receipt network mismatch: expected {active_network!r}")
     unsigned = {
         "network": data["network"],
         "device": data["device"],
